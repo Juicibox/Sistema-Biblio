@@ -11,7 +11,7 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
 # Configuración API HuggingFace
-API_URL = "https://api-inference.huggingface.co/models/kristaller486/dots.ocr-1.5"
+API_URL = "https://api-inference.huggingface.co/models/microsoft/trocr-large-printed"
 
 st.set_page_config(
     page_title="Sistematización Biblioteca - OCR API",
@@ -61,7 +61,7 @@ st.markdown("""
     <h4>¿Qué hace esta app?</h4>
     <ol>
         <li><strong>Sube una foto</strong> de tus notas de grupo focal (papel, pizarra, etc.)</li>
-        <li><strong>OCR Inteligente</strong> con DOTS.OCR-1.5 extrae el texto estructurado</li>
+        <li><strong>OCR Inteligente</strong> con TrOCR (microsoft/trocr-large-printed) extrae el texto estructurado</li>
         <li><strong>Visualización</strong> en tabla tipo Excel editable</li>
         <li><strong>NLP/ML</strong> extrae palabras clave, categoriza y sistematiza automáticamente</li>
         <li><strong>Exporta</strong> a Excel con el análisis completo</li>
@@ -112,6 +112,9 @@ def query_ocr_api(image, token):
 
     if response.status_code in (401, 403):
         raise Exception("Token de HuggingFace inválido o sin permisos. Verifica tu token en huggingface.co/settings/tokens.")
+
+    if response.status_code == 410:
+        raise Exception("El modelo OCR ya no está disponible en HuggingFace (HTTP 410). El recurso ha sido eliminado de forma permanente.")
 
     if response.status_code == 429:
         raise Exception("Límite de solicitudes alcanzado. Espera un momento e intenta de nuevo.")
@@ -241,7 +244,7 @@ if uploaded_file is not None:
 
     with col2:
         st.subheader("Vista previa")
-        st.info("La imagen se procesará con DOTS.OCR-1.5 via HuggingFace API para extraer texto estructurado")
+        st.info("La imagen se procesará con TrOCR (microsoft/trocr-large-printed) via HuggingFace API para extraer texto estructurado")
 
         if procesar:
             if not api_token:
@@ -290,6 +293,8 @@ if uploaded_file is not None:
                         st.info(" El modelo tarda unos segundos en arrancar. Haz clic en 'Procesar con OCR' de nuevo.")
                     elif "límite" in msg:
                         st.info("Espera unos minutos antes de volver a intentarlo.")
+                    elif "410" in msg or "eliminado" in msg or "ya no está disponible" in msg:
+                        st.info("El modelo OCR ya no está disponible. Por favor, contacta al administrador de la aplicación.")
                     else:
                         st.info("Intenta de nuevo. Si el problema persiste, verifica tu token de HuggingFace o usa una imagen más clara.")
 
@@ -467,7 +472,7 @@ with st.expander(" ¿Cómo usar esta aplicación?"):
 
     3. **Sube la imagen**: Arrastra o selecciona tu foto en el área de carga.
 
-    4. **Procesa con OCR**: Haz clic en "Procesar con OCR". El modelo DOTS.OCR-1.5
+    4. **Procesa con OCR**: Haz clic en "Procesar con OCR". El modelo TrOCR
        extraerá el texto automáticamente via API.
 
     5. **Revisa y edita**: La tabla generada es editable. Corrige cualquier error
