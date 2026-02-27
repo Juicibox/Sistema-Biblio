@@ -11,7 +11,7 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
 # Configuración API HuggingFace
-API_URL = "https://api-inference.huggingface.co/models/microsoft/trocr-large-printed"
+API_URL = "https://api-inference.huggingface.co/models/microsoft/trocr-base-printed"
 
 st.set_page_config(
     page_title="Sistematización Biblioteca - OCR API",
@@ -61,7 +61,7 @@ st.markdown("""
     <h4>¿Qué hace esta app?</h4>
     <ol>
         <li><strong>Sube una foto</strong> de tus notas de grupo focal (papel, pizarra, etc.)</li>
-        <li><strong>OCR Inteligente</strong> con TrOCR (microsoft/trocr-large-printed) extrae el texto estructurado</li>
+        <li><strong>OCR Inteligente</strong> con TrOCR (microsoft/trocr-base-printed) extrae el texto estructurado</li>
         <li><strong>Visualización</strong> en tabla tipo Excel editable</li>
         <li><strong>NLP/ML</strong> extrae palabras clave, categoriza y sistematiza automáticamente</li>
         <li><strong>Exporta</strong> a Excel con el análisis completo</li>
@@ -244,7 +244,7 @@ if uploaded_file is not None:
 
     with col2:
         st.subheader("Vista previa")
-        st.info("La imagen se procesará con TrOCR (microsoft/trocr-large-printed) via HuggingFace API para extraer texto estructurado")
+        st.info("La imagen se procesará con TrOCR (microsoft/trocr-base-printed) via HuggingFace API para extraer texto estructurado")
 
         if procesar:
             if not api_token:
