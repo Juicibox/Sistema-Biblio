@@ -109,7 +109,29 @@ def query_ocr_api(image, token):
     image.save(buffered, format="PNG")
     img_bytes = buffered.getvalue()
     response = requests.post(API_URL, headers=headers, data=img_bytes)
-    return response.json()
+
+    if response.status_code in (401, 403):
+        raise Exception("Token de HuggingFace inválido o sin permisos. Verifica tu token en huggingface.co/settings/tokens.")
+
+    if response.status_code == 429:
+        raise Exception("Límite de solicitudes alcanzado. Espera un momento e intenta de nuevo.")
+
+    if response.status_code == 503:
+        try:
+            error_data = response.json()
+            raw_wait = error_data.get("estimated_time", 20)
+            wait_time = float(raw_wait) if raw_wait is not None else 20
+            raise Exception(f"El modelo está cargando en HuggingFace. Espera ~{wait_time:.0f} segundos e intenta de nuevo.")
+        except (json.JSONDecodeError, ValueError):
+            raise Exception("El modelo está cargando en HuggingFace. Espera unos segundos e intenta de nuevo.")
+
+    if not response.content:
+        raise Exception(f"La API devolvió una respuesta vacía (HTTP {response.status_code}). Intenta de nuevo en unos segundos.")
+
+    try:
+        return response.json()
+    except (json.JSONDecodeError, ValueError):
+        raise Exception(f"Respuesta inesperada de la API (HTTP {response.status_code}): {response.text[:300]}")
 
 def extraer_json(texto):
     """Extrae el JSON de la respuesta del modelo"""
@@ -261,7 +283,15 @@ if uploaded_file is not None:
 
                 except Exception as e:
                     st.error(f"Error en el procesamiento: {e}")
-                    st.info("Intenta con una imagen más clara o verifica tu token de HuggingFace")
+                    msg = str(e).lower()
+                    if "token" in msg or "permisos" in msg or "inválido" in msg:
+                        st.info("💡 Verifica que tu token de HuggingFace sea válido y tenga permisos de lectura.")
+                    elif "cargando" in msg:
+                        st.info("💡 El modelo tarda unos segundos en arrancar. Haz clic en 'Procesar con OCR' de nuevo.")
+                    elif "límite" in msg:
+                        st.info("💡 Espera unos minutos antes de volver a intentarlo.")
+                    else:
+                        st.info("💡 Intenta de nuevo. Si el problema persiste, verifica tu token de HuggingFace o usa una imagen más clara.")
 
 # Mostrar resultados y análisis NLP
 if st.session_state.df_resultado is not None:
