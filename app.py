@@ -58,7 +58,7 @@ st.markdown('<div class="main-header">📚 Sistematización Inteligente de Grupo
 
 st.markdown("""
 <div class="info-box">
-    <h4>🎯 ¿Qué hace esta app?</h4>
+    <h4>¿Qué hace esta app?</h4>
     <ol>
         <li><strong>Sube una foto</strong> de tus notas de grupo focal (papel, pizarra, etc.)</li>
         <li><strong>OCR Inteligente</strong> con DOTS.OCR-1.5 extrae el texto estructurado</li>
@@ -71,11 +71,11 @@ st.markdown("""
 
 # Sidebar para configuración
 with st.sidebar:
-    st.header("⚙️ Configuración")
+    st.header("Configuración")
 
     st.subheader("Token HuggingFace")
     api_token = st.text_input(
-        "🔑 Token de HuggingFace",
+        "Token de HuggingFace",
         type="password",
         help="Obtén uno gratis en huggingface.co/settings/tokens"
     )
@@ -285,13 +285,13 @@ if uploaded_file is not None:
                     st.error(f"Error en el procesamiento: {e}")
                     msg = str(e).lower()
                     if "token" in msg or "permisos" in msg or "inválido" in msg:
-                        st.info("💡 Verifica que tu token de HuggingFace sea válido y tenga permisos de lectura.")
+                        st.info(" Verifica que tu token de HuggingFace sea válido y tenga permisos de lectura.")
                     elif "cargando" in msg:
-                        st.info("💡 El modelo tarda unos segundos en arrancar. Haz clic en 'Procesar con OCR' de nuevo.")
+                        st.info(" El modelo tarda unos segundos en arrancar. Haz clic en 'Procesar con OCR' de nuevo.")
                     elif "límite" in msg:
-                        st.info("💡 Espera unos minutos antes de volver a intentarlo.")
+                        st.info("Espera unos minutos antes de volver a intentarlo.")
                     else:
-                        st.info("💡 Intenta de nuevo. Si el problema persiste, verifica tu token de HuggingFace o usa una imagen más clara.")
+                        st.info("Intenta de nuevo. Si el problema persiste, verifica tu token de HuggingFace o usa una imagen más clara.")
 
 # Mostrar resultados y análisis NLP
 if st.session_state.df_resultado is not None:
@@ -322,7 +322,7 @@ if st.session_state.df_resultado is not None:
         }
     )
 
-    st.markdown('<div class="sub-header">🤖 3. Análisis NLP y Sistematización</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header"> 3. Análisis NLP y Sistematización</div>', unsafe_allow_html=True)
 
     col_nlp1, col_nlp2 = st.columns([1, 1])
 
@@ -347,7 +347,7 @@ if st.session_state.df_resultado is not None:
                 st.success("Análisis NLP completado")
 
     with col_nlp2:
-        if st.button("📈 Generar Visualizaciones", use_container_width=True):
+        if st.button("Generar Visualizaciones", use_container_width=True):
             if 'df_analizado' in st.session_state:
                 st.session_state.mostrar_viz = True
             else:
@@ -360,7 +360,7 @@ if st.session_state.df_resultado is not None:
         st.dataframe(df_viz, use_container_width=True)
 
         if st.session_state.get('mostrar_viz', False):
-            st.markdown('<div class="sub-header">📈 4. Visualizaciones y Sistematización</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sub-header"> 4. Visualizaciones y Sistematización</div>', unsafe_allow_html=True)
 
             tab1, tab2, tab3 = st.tabs(["Distribución de Temas", "Nube de Palabras", "Matriz de Prioridades"])
 
@@ -399,7 +399,7 @@ if st.session_state.df_resultado is not None:
                     )
                     st.dataframe(matriz, use_container_width=True)
 
-                    st.markdown("**🎯 Insights detectados:**")
+                    st.markdown("** Insights detectados:**")
                     tema_mas_frecuente = df_viz['tema_detectado'].mode()[0]
                     prioridad_dominante = df_viz['prioridad_nlp'].mode()[0]
 
@@ -456,7 +456,7 @@ if st.session_state.df_resultado is not None:
             )
 
 # Instrucciones al final
-with st.expander("📖 ¿Cómo usar esta aplicación?"):
+with st.expander(" ¿Cómo usar esta aplicación?"):
     st.markdown("""
     ### Guía paso a paso:
 
