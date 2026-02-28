@@ -6,13 +6,13 @@ import io
 import json
 import re
 from collections import Counter
-import anthropic
+import google.generativeai as genai
 
 # ─────────────────────────────────────────────
 # Configuración de página
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Sistematización Biblioteca - OCR Claude",
+    page_title="Sistematización Biblioteca - OCR Gemini",
     page_icon="📚",
     layout="wide"
 )
@@ -48,8 +48,9 @@ st.markdown('<div class="main-header">📚 Sistematización Inteligente de Grupo
 st.markdown("""
 <div class="info-box">
     <b>🎯 ¿Cómo funciona?</b>
-    Sube una foto de tus notas → Claude extrae el texto estructurado →
-    Edita la tabla → Aplica análisis NLP → Exporta a Excel o JSON.
+    Sube una foto de tus notas → Gemini extrae el texto estructurado →
+    Edita la tabla → Aplica análisis NLP → Exporta a Excel o JSON.<br><br>
+    <b>✅ Usa Google Gemini API — tiene nivel gratuito generoso (15 requests/min, 1500/día).</b>
 </div>
 """, unsafe_allow_html=True)
 
@@ -60,10 +61,11 @@ with st.sidebar:
     st.header("⚙️ Configuración")
 
     api_key = st.text_input(
-        "🔑 API Key de Anthropic",
+        "🔑 API Key de Google Gemini",
         type="password",
-        help="Obtén una en console.anthropic.com"
+        help="Obtén una GRATIS en: aistudio.google.com/apikey"
     )
+    st.caption("👉 [Obtener API Key gratis](https://aistudio.google.com/apikey)")
 
     st.markdown("---")
     st.subheader("📋 Segmento Poblacional")
@@ -75,39 +77,40 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("🤖 Análisis NLP")
-    analisis_tematico = st.checkbox("Categorización temática automática", value=True)
-    extraer_keywords  = st.checkbox("Extraer palabras clave", value=True)
+    analisis_tematico  = st.checkbox("Categorización temática automática", value=True)
+    extraer_keywords   = st.checkbox("Extraer palabras clave", value=True)
     analizar_prioridad = st.checkbox("Detectar nivel de prioridad", value=True)
 
 if not api_key:
-    st.warning("⚠️ Ingresa tu API Key de Anthropic en la barra lateral para continuar.")
+    st.warning("⚠️ Ingresa tu API Key de Google Gemini en la barra lateral para continuar.")
+    st.info("👉 Obtén una gratis en: https://aistudio.google.com/apikey (solo necesitas una cuenta de Google)")
     st.stop()
 
 # ─────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────
-for key in ['df_resultado', 'texto_crudo', 'df_analizado', 'mostrar_viz']:
+for key, default in [
+    ('df_resultado', None),
+    ('texto_crudo', ""),
+    ('df_analizado', None),
+    ('mostrar_viz', False)
+]:
     if key not in st.session_state:
-        st.session_state[key] = None if key != 'mostrar_viz' else False
-if 'texto_crudo' not in st.session_state:
-    st.session_state['texto_crudo'] = ""
+        st.session_state[key] = default
 
 # ─────────────────────────────────────────────
-# OCR con Claude
+# OCR con Gemini
 # ─────────────────────────────────────────────
-def ocr_with_claude(image: Image.Image, api_key: str, segmento: str) -> str:
-    """Envía la imagen a Claude y obtiene JSON estructurado."""
-    buffered = io.BytesIO()
-    image.save(buffered, format="PNG")
-    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-    client = anthropic.Anthropic(api_key=api_key)
+def ocr_with_gemini(image: Image.Image, api_key: str, segmento: str) -> str:
+    """Envía la imagen a Gemini y obtiene JSON estructurado."""
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-1.5-flash")  # Modelo gratuito y rápido
 
     prompt = f"""Analiza esta imagen de notas de un grupo focal sobre una biblioteca.
 Segmento participante: {segmento}
 
 Extrae TODA la información visible y devuelve SOLO un JSON válido con esta estructura exacta,
-sin texto adicional antes ni después:
+sin texto adicional antes ni después, sin bloques de código markdown:
 
 {{
     "registros": [
@@ -121,38 +124,22 @@ sin texto adicional antes ni después:
     ]
 }}
 
-Si hay varias ideas o comentarios en la imagen, crea un registro por cada uno.
+Si hay varias ideas o comentarios en la imagen, crea un registro separado por cada uno.
 Si la imagen no contiene texto legible, devuelve {{"registros": []}}.
-"""
+Responde ÚNICAMENTE con el JSON, sin explicaciones adicionales."""
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=2000,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": img_b64
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": prompt
-                }
-            ]
-        }]
-    )
-    return message.content[0].text
+    response = model.generate_content([prompt, image])
+    return response.text
 
 
 def extraer_json(texto: str) -> dict:
     """Extrae el JSON de la respuesta del modelo."""
     try:
-        json_match = re.search(r'\{.*\}', texto, re.DOTALL)
+        # Limpiar posibles bloques markdown ```json ... ```
+        texto_limpio = re.sub(r'```(?:json)?\s*', '', texto).strip()
+        texto_limpio = texto_limpio.replace('```', '').strip()
+
+        json_match = re.search(r'\{.*\}', texto_limpio, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
     except Exception:
@@ -160,7 +147,7 @@ def extraer_json(texto: str) -> dict:
     return {"registros": []}
 
 # ─────────────────────────────────────────────
-# NLP sin dependencias pesadas (solo Python puro)
+# NLP (Python puro, sin dependencias pesadas)
 # ─────────────────────────────────────────────
 CATEGORIAS_ESPACIO = [
     'sala', 'espacio', 'lugar', 'ambiente', 'zona', 'área', 'cuarto',
@@ -176,7 +163,6 @@ CATEGORIAS_BARRERA = [
     'horario', 'tiempo', 'lejos', 'dificultad', 'problema', 'falta', 'no hay',
     'caro', 'costo', 'pago', 'limitación', 'restricción', 'barrera'
 ]
-
 STOPWORDS_ES = set([
     'que', 'de', 'la', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las',
     'por', 'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'más',
@@ -187,7 +173,7 @@ STOPWORDS_ES = set([
     'esto', 'antes', 'algunos', 'unos', 'yo', 'otro', 'otras', 'otra',
     'tanto', 'esa', 'estos', 'mucho', 'cual', 'poco', 'ella', 'estas',
     'algo', 'nosotros', 'nada', 'muchos', 'quienes', 'estar', 'como',
-    'han', 'fue', 'son', 'ser', 'has', 'hay', 'era', 'sido', 'está'
+    'han', 'fue', 'son', 'ser', 'has', 'era', 'sido', 'está'
 ])
 
 
@@ -212,7 +198,7 @@ def detectar_prioridad(texto: str) -> str:
     t = texto.lower()
     alta = ['urgente', 'necesitamos', 'falta', 'importante', 'crítico',
             'todos', 'siempre', 'nunca', 'imprescindible']
-    baja  = ['quizás', 'tal vez', 'podría', 'sería bueno', 'me gustaría', 'preferiría']
+    baja = ['quizás', 'tal vez', 'podría', 'sería bueno', 'me gustaría', 'preferiría']
     score_alta = sum(1 for p in alta if p in t)
     score_baja = sum(1 for p in baja if p in t)
     if score_alta > score_baja:
@@ -239,16 +225,16 @@ if uploaded_file is not None:
         st.subheader("Imagen subida")
         image = Image.open(uploaded_file)
         st.image(image, use_container_width=True)
-        procesar = st.button("🚀 Procesar con Claude OCR", type="primary", use_container_width=True)
+        procesar = st.button("🚀 Procesar con Gemini OCR", type="primary", use_container_width=True)
 
     with col2:
         st.subheader("Estado del procesamiento")
-        st.info("Claude analizará la imagen y extraerá el texto estructurado automáticamente.")
+        st.info("Gemini analizará la imagen y extraerá el texto estructurado automáticamente.")
 
         if procesar:
             try:
-                with st.spinner("🔍 Analizando imagen con Claude..."):
-                    resultado_ocr = ocr_with_claude(image, api_key, segmento)
+                with st.spinner("🔍 Analizando imagen con Gemini..."):
+                    resultado_ocr = ocr_with_gemini(image, api_key, segmento)
                     st.session_state.texto_crudo = resultado_ocr
 
                     datos_json = extraer_json(resultado_ocr)
@@ -258,14 +244,14 @@ if uploaded_file is not None:
                     else:
                         # Fallback: tabla vacía editable
                         df = pd.DataFrame({
-                            'hora':       [''],
-                            'cita':       [resultado_ocr[:300]],
-                            'tema':       ['Por clasificar'],
-                            'subtema':    [''],
-                            'importancia':['Media']
+                            'hora':        [''],
+                            'cita':        [resultado_ocr[:300]],
+                            'tema':        ['Por clasificar'],
+                            'subtema':     [''],
+                            'importancia': ['Media']
                         })
 
-                    # Asegurar columnas mínimas
+                    # Asegurar que existan todas las columnas necesarias
                     for col in ['hora', 'cita', 'tema', 'subtema', 'importancia']:
                         if col not in df.columns:
                             df[col] = ''
@@ -274,12 +260,14 @@ if uploaded_file is not None:
                     st.session_state.df_resultado = df
                     st.success("✅ ¡Procesamiento completado!")
 
-            except anthropic.AuthenticationError:
-                st.error("❌ API Key inválida. Verifica tu clave en console.anthropic.com")
-            except anthropic.RateLimitError:
-                st.error("⏳ Límite de uso alcanzado. Espera un momento e intenta de nuevo.")
             except Exception as e:
-                st.error(f"Error en el procesamiento: {e}")
+                err = str(e)
+                if 'API_KEY_INVALID' in err or 'API key' in err.lower():
+                    st.error("❌ API Key inválida. Verifica tu clave en aistudio.google.com/apikey")
+                elif 'quota' in err.lower() or 'rate' in err.lower():
+                    st.error("⏳ Límite de uso alcanzado. Espera un minuto e intenta de nuevo.")
+                else:
+                    st.error(f"Error en el procesamiento: {e}")
 
 # ─────────────────────────────────────────────
 # 2. Tabla editable
@@ -318,10 +306,8 @@ if st.session_state.df_resultado is not None:
 
                 if analisis_tematico:
                     df_analizado['tema_detectado'] = df_analizado['cita'].apply(clasificar_tema)
-
                 if extraer_keywords:
                     df_analizado['palabras_clave'] = df_analizado['cita'].apply(extraer_palabras_clave)
-
                 if analizar_prioridad:
                     df_analizado['prioridad_nlp'] = df_analizado['cita'].apply(detectar_prioridad)
 
@@ -351,12 +337,10 @@ if st.session_state.df_resultado is not None:
 
             with tab1:
                 col_c1, col_c2 = st.columns(2)
-
                 with col_c1:
                     st.subheader("Distribución por Tema")
                     col_tema = 'tema_detectado' if 'tema_detectado' in df_viz.columns else 'tema'
                     st.bar_chart(df_viz[col_tema].value_counts())
-
                 with col_c2:
                     st.subheader("Distribución por Prioridad")
                     col_prio = 'prioridad_nlp' if 'prioridad_nlp' in df_viz.columns else 'importancia'
@@ -372,9 +356,8 @@ if st.session_state.df_resultado is not None:
                     st.dataframe(matriz, use_container_width=True)
 
                     st.markdown("**🎯 Insights detectados:**")
-                    tema_frecuente  = df_viz['tema_detectado'].mode()[0]
-                    prio_dominante  = df_viz['prioridad_nlp'].mode()[0]
-
+                    tema_frecuente = df_viz['tema_detectado'].mode()[0]
+                    prio_dominante = df_viz['prioridad_nlp'].mode()[0]
                     st.markdown(f"""
 - **Tema más mencionado:** {tema_frecuente}
 - **Nivel de prioridad predominante:** {prio_dominante}
@@ -406,7 +389,6 @@ if st.session_state.df_resultado is not None:
                 if 'tema_detectado' in df_export.columns and 'prioridad_nlp' in df_export.columns:
                     resumen = df_export.groupby(['tema_detectado', 'prioridad_nlp']).size().reset_index(name='conteo')
                     resumen.to_excel(writer, sheet_name='Resumen_Temas', index=False)
-
                 if 'palabras_clave' in df_export.columns:
                     todas_kw = ', '.join(df_export['palabras_clave'].dropna())
                     pd.DataFrame({'palabras_clave_consolidadas': [todas_kw]}).to_excel(
@@ -439,14 +421,20 @@ with st.expander("📖 ¿Cómo usar esta aplicación?"):
     st.markdown("""
 ### Guía paso a paso
 
-1. **Ingresa tu API Key** de Anthropic en la barra lateral (console.anthropic.com → API Keys).
-2. **Selecciona el segmento** poblacional del grupo focal.
-3. **Sube la foto** de tus notas (papel, pizarra, cuaderno, etc.).
-4. **Haz clic en "Procesar con Claude OCR"** → Claude extraerá el texto automáticamente.
-5. **Revisa y edita** la tabla generada directamente en las celdas.
-6. **Aplica el análisis NLP** para categorizar, extraer palabras clave y detectar prioridades.
-7. **Genera visualizaciones** para identificar patrones.
-8. **Exporta** el Excel o JSON con el análisis completo.
+1. **Obtén tu API Key gratis** en [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (solo necesitas una cuenta de Google).
+2. **Ingresa la API Key** en la barra lateral.
+3. **Selecciona el segmento** poblacional del grupo focal.
+4. **Sube la foto** de tus notas (papel, pizarra, cuaderno, etc.).
+5. **Haz clic en "Procesar con Gemini OCR"** → Gemini extraerá el texto automáticamente.
+6. **Revisa y edita** la tabla generada directamente en las celdas.
+7. **Aplica el análisis NLP** para categorizar, extraer palabras clave y detectar prioridades.
+8. **Genera visualizaciones** para identificar patrones.
+9. **Exporta** el Excel o JSON con el análisis completo.
+
+### Límites gratuitos de Gemini
+- 15 requests por minuto
+- 1,500 requests por día
+- Sin necesidad de tarjeta de crédito
 
 ### Tips para mejores resultados
 - Usa buena iluminación al tomar la foto
