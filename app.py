@@ -1,236 +1,235 @@
-
 import streamlit as st
 import pandas as pd
-import requests
+import base64
 from PIL import Image
 import io
 import json
 import re
 from collections import Counter
-from wordcloud import WordCloud
-import matplotlib.pyplot as plt
+import anthropic
 
-# Configuración API HuggingFace
-API_URL = "https://api-inference.huggingface.co/models/microsoft/trocr-base-printed"
-
+# ─────────────────────────────────────────────
+# Configuración de página
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Sistematización Biblioteca - OCR API",
+    page_title="Sistematización Biblioteca - OCR Claude",
     page_icon="📚",
     layout="wide"
 )
 
-# CSS personalizado
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 2.2rem;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
-        margin-bottom: 2rem;
+        margin-bottom: 1.5rem;
     }
     .sub-header {
-        font-size: 1.5rem;
+        font-size: 1.3rem;
         color: #2c3e50;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
+        margin-top: 1.5rem;
+        margin-bottom: 0.8rem;
+        font-weight: 600;
     }
     .info-box {
         background-color: #f0f8ff;
         padding: 1rem;
         border-radius: 10px;
         border-left: 5px solid #1f77b4;
-    }
-    .success-box {
-        background-color: #d4edda;
-        padding: 1rem;
-        border-radius: 10px;
-        border-left: 5px solid #28a745;
-    }
-    .stDataFrame {
-        font-size: 14px;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Título principal
 st.markdown('<div class="main-header">📚 Sistematización Inteligente de Grupos Focales</div>', unsafe_allow_html=True)
 
 st.markdown("""
 <div class="info-box">
-    <h4>¿Qué hace esta app?</h4>
-    <ol>
-        <li><strong>Sube una foto</strong> de tus notas de grupo focal (papel, pizarra, etc.)</li>
-        <li><strong>OCR Inteligente</strong> con TrOCR (microsoft/trocr-base-printed) extrae el texto estructurado</li>
-        <li><strong>Visualización</strong> en tabla tipo Excel editable</li>
-        <li><strong>NLP/ML</strong> extrae palabras clave, categoriza y sistematiza automáticamente</li>
-        <li><strong>Exporta</strong> a Excel con el análisis completo</li>
-    </ol>
+    <b>🎯 ¿Cómo funciona?</b>
+    Sube una foto de tus notas → Claude extrae el texto estructurado →
+    Edita la tabla → Aplica análisis NLP → Exporta a Excel o JSON.
 </div>
 """, unsafe_allow_html=True)
 
-# Sidebar para configuración
+# ─────────────────────────────────────────────
+# Sidebar
+# ─────────────────────────────────────────────
 with st.sidebar:
-    st.header("Configuración")
+    st.header("⚙️ Configuración")
 
-    st.subheader("Token HuggingFace")
-    api_token = st.text_input(
-        "Token de HuggingFace",
+    api_key = st.text_input(
+        "🔑 API Key de Anthropic",
         type="password",
-        help="Obtén uno gratis en huggingface.co/settings/tokens"
+        help="Obtén una en console.anthropic.com"
     )
-    if api_token:
-        st.success("Token configurado ✅")
-    else:
-        st.info("Ingresa tu token para usar el OCR")
 
-    st.subheader("Segmento Poblacional")
+    st.markdown("---")
+    st.subheader("📋 Segmento Poblacional")
     segmento = st.selectbox(
-        "Selecciona el grupo:",
+        "Grupo focal:",
         ["Infancia", "Población General", "Académicos/Investigadores",
          "Artistas/Creadores", "Editores/Escritores", "Bibliotecas Municipales"]
     )
 
-    st.subheader("Análisis NLP")
-    analisis_tematico = st.checkbox("Activar categorización temática", value=True)
-    extraer_keywords = st.checkbox("Extraer palabras clave", value=True)
-    analizar_sentimiento = st.checkbox("Análisis de prioridad (intensidad)", value=True)
+    st.markdown("---")
+    st.subheader("🤖 Análisis NLP")
+    analisis_tematico = st.checkbox("Categorización temática automática", value=True)
+    extraer_keywords  = st.checkbox("Extraer palabras clave", value=True)
+    analizar_prioridad = st.checkbox("Detectar nivel de prioridad", value=True)
 
-# Inicializar session state
-if 'df_resultado' not in st.session_state:
-    st.session_state.df_resultado = None
+if not api_key:
+    st.warning("⚠️ Ingresa tu API Key de Anthropic en la barra lateral para continuar.")
+    st.stop()
+
+# ─────────────────────────────────────────────
+# Session state
+# ─────────────────────────────────────────────
+for key in ['df_resultado', 'texto_crudo', 'df_analizado', 'mostrar_viz']:
+    if key not in st.session_state:
+        st.session_state[key] = None if key != 'mostrar_viz' else False
 if 'texto_crudo' not in st.session_state:
-    st.session_state.texto_crudo = ""
+    st.session_state['texto_crudo'] = ""
 
-def query_ocr_api(image, token):
-    """Consulta la API de HuggingFace para OCR"""
-    headers = {"Authorization": f"Bearer {token}"}
+# ─────────────────────────────────────────────
+# OCR con Claude
+# ─────────────────────────────────────────────
+def ocr_with_claude(image: Image.Image, api_key: str, segmento: str) -> str:
+    """Envía la imagen a Claude y obtiene JSON estructurado."""
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
-    img_bytes = buffered.getvalue()
-    response = requests.post(API_URL, headers=headers, data=img_bytes)
+    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    if response.status_code in (401, 403):
-        raise Exception("Token de HuggingFace inválido o sin permisos. Verifica tu token en huggingface.co/settings/tokens.")
+    client = anthropic.Anthropic(api_key=api_key)
 
-    if response.status_code == 410:
-        raise Exception("El modelo OCR ya no está disponible en HuggingFace (HTTP 410). El recurso ha sido eliminado de forma permanente.")
+    prompt = f"""Analiza esta imagen de notas de un grupo focal sobre una biblioteca.
+Segmento participante: {segmento}
 
-    if response.status_code == 429:
-        raise Exception("Límite de solicitudes alcanzado. Espera un momento e intenta de nuevo.")
+Extrae TODA la información visible y devuelve SOLO un JSON válido con esta estructura exacta,
+sin texto adicional antes ni después:
 
-    if response.status_code == 503:
-        try:
-            error_data = response.json()
-            raw_wait = error_data.get("estimated_time", 20)
-            wait_time = float(raw_wait) if raw_wait is not None else 20
-            raise Exception(f"El modelo está cargando en HuggingFace. Espera ~{wait_time:.0f} segundos e intenta de nuevo.")
-        except (json.JSONDecodeError, ValueError):
-            raise Exception("El modelo está cargando en HuggingFace. Espera unos segundos e intenta de nuevo.")
+{{
+    "registros": [
+        {{
+            "hora": "hora si aparece, si no deja vacío",
+            "cita": "texto exacto o resumen de lo que dijeron",
+            "tema": "Espacio|Servicio|Barrera|Otro",
+            "subtema": "descripción específica del subtema",
+            "importancia": "Alta|Media|Baja"
+        }}
+    ]
+}}
 
-    if not response.content:
-        raise Exception(f"La API devolvió una respuesta vacía (HTTP {response.status_code}). Intenta de nuevo en unos segundos.")
+Si hay varias ideas o comentarios en la imagen, crea un registro por cada uno.
+Si la imagen no contiene texto legible, devuelve {{"registros": []}}.
+"""
 
-    try:
-        return response.json()
-    except (json.JSONDecodeError, ValueError):
-        raise Exception(f"Respuesta inesperada de la API (HTTP {response.status_code}): {response.text[:300]}")
+    message = client.messages.create(
+        model="claude-opus-4-5",
+        max_tokens=2000,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": img_b64
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ]
+        }]
+    )
+    return message.content[0].text
 
-def extraer_json(texto):
-    """Extrae el JSON de la respuesta del modelo"""
+
+def extraer_json(texto: str) -> dict:
+    """Extrae el JSON de la respuesta del modelo."""
     try:
         json_match = re.search(r'\{.*\}', texto, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
-        return {"registros": []}
     except Exception:
-        return {"registros": []}
+        pass
+    return {"registros": []}
 
-# Funciones de NLP para sistematización
-def cargar_nlp():
-    """Carga modelo spaCy para español"""
-    try:
-        import spacy
-        return spacy.load("es_core_news_md")
-    except Exception:
-        st.warning("Modelo spaCy no encontrado. Instalando...")
-        import os
-        os.system("python -m spacy download es_core_news_md")
-        import spacy
-        return spacy.load("es_core_news_md")
-
-# Diccionarios de categorización para bibliotecas
+# ─────────────────────────────────────────────
+# NLP sin dependencias pesadas (solo Python puro)
+# ─────────────────────────────────────────────
 CATEGORIAS_ESPACIO = [
     'sala', 'espacio', 'lugar', 'ambiente', 'zona', 'área', 'cuarto',
     'iluminación', 'luz', 'ventilación', 'aire', 'ruido', 'silencio',
     'silla', 'mesa', 'escritorio', 'computador', 'equipo', 'mobiliario'
 ]
-
 CATEGORIAS_SERVICIO = [
     'servicio', 'préstamo', 'consulta', 'asesoría', 'taller', 'actividad',
     'programa', 'evento', 'capacitación', 'formación', 'wifi', 'internet',
     'digital', 'base de datos', 'catálogo', 'web'
 ]
-
 CATEGORIAS_BARRERA = [
     'horario', 'tiempo', 'lejos', 'dificultad', 'problema', 'falta', 'no hay',
     'caro', 'costo', 'pago', 'limitación', 'restricción', 'barrera'
 ]
 
-def clasificar_tema(texto):
-    """Clasifica el texto en Espacio, Servicio o Barrera"""
-    texto_lower = texto.lower()
-    score_espacio = sum(1 for palabra in CATEGORIAS_ESPACIO if palabra in texto_lower)
-    score_servicio = sum(1 for palabra in CATEGORIAS_SERVICIO if palabra in texto_lower)
-    score_barrera = sum(1 for palabra in CATEGORIAS_BARRERA if palabra in texto_lower)
-    scores = {'Espacio': score_espacio, 'Servicio': score_servicio, 'Barrera': score_barrera}
+STOPWORDS_ES = set([
+    'que', 'de', 'la', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las',
+    'por', 'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'más',
+    'pero', 'sus', 'le', 'ya', 'o', 'este', 'sí', 'porque', 'esta',
+    'entre', 'cuando', 'muy', 'sin', 'sobre', 'también', 'me', 'hasta',
+    'hay', 'donde', 'quien', 'desde', 'todo', 'nos', 'durante', 'todos',
+    'uno', 'les', 'ni', 'contra', 'otros', 'ese', 'eso', 'ante', 'ellos',
+    'esto', 'antes', 'algunos', 'unos', 'yo', 'otro', 'otras', 'otra',
+    'tanto', 'esa', 'estos', 'mucho', 'cual', 'poco', 'ella', 'estas',
+    'algo', 'nosotros', 'nada', 'muchos', 'quienes', 'estar', 'como',
+    'han', 'fue', 'son', 'ser', 'has', 'hay', 'era', 'sido', 'está'
+])
+
+
+def clasificar_tema(texto: str) -> str:
+    t = texto.lower()
+    scores = {
+        'Espacio':  sum(1 for p in CATEGORIAS_ESPACIO  if p in t),
+        'Servicio': sum(1 for p in CATEGORIAS_SERVICIO if p in t),
+        'Barrera':  sum(1 for p in CATEGORIAS_BARRERA  if p in t),
+    }
     return max(scores, key=scores.get) if max(scores.values()) > 0 else 'Otro'
 
-def extraer_palabras_clave(texto, nlp_model, n=5):
-    """Extrae las n palabras clave más importantes"""
-    doc = nlp_model(texto.lower())
-    tokens = [
-        token.lemma_ for token in doc
-        if not token.is_stop and not token.is_punct and not token.is_space
-        and len(token.text) > 3 and token.pos_ in ['NOUN', 'ADJ', 'VERB']
-    ]
-    freq = Counter(tokens)
-    return ', '.join([palabra for palabra, _ in freq.most_common(n)])
 
-def detectar_prioridad(texto):
-    """Detecta nivel de prioridad basado en intensidad lingüística"""
-    texto_lower = texto.lower()
-    alta = ['urgente', 'necesitamos', 'falta', 'importante', 'crítico', 'todos', 'siempre', 'nunca']
-    baja = ['quizás', 'tal vez', 'podría', 'sería bueno', 'me gustaría', 'preferiría']
-    score_alta = sum(1 for palabra in alta if palabra in texto_lower)
-    score_baja = sum(1 for palabra in baja if palabra in texto_lower)
+def extraer_palabras_clave(texto: str, n: int = 5) -> str:
+    palabras = re.findall(r'\b[a-záéíóúüñ]{4,}\b', texto.lower())
+    palabras = [p for p in palabras if p not in STOPWORDS_ES]
+    freq = Counter(palabras)
+    return ', '.join([p for p, _ in freq.most_common(n)])
+
+
+def detectar_prioridad(texto: str) -> str:
+    t = texto.lower()
+    alta = ['urgente', 'necesitamos', 'falta', 'importante', 'crítico',
+            'todos', 'siempre', 'nunca', 'imprescindible']
+    baja  = ['quizás', 'tal vez', 'podría', 'sería bueno', 'me gustaría', 'preferiría']
+    score_alta = sum(1 for p in alta if p in t)
+    score_baja = sum(1 for p in baja if p in t)
     if score_alta > score_baja:
         return 'Alta'
     elif score_baja > score_alta:
         return 'Baja'
     return 'Media'
 
-def generar_nube_palabras(textos):
-    """Genera nube de palabras de los textos"""
-    texto_completo = ' '.join(textos).lower()
-    stopwords = set(['que', 'de', 'la', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las', 'por', 'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'más', 'pero', 'sus', 'le', 'ya', 'o', 'este', 'sí', 'porque', 'esta', 'entre', 'cuando', 'muy', 'sin', 'sobre', 'también', 'me', 'hasta', 'hay', 'donde', 'quien', 'desde', 'todo', 'nos', 'durante', 'todos', 'uno', 'les', 'ni', 'contra', 'otros', 'ese', 'eso', 'ante', 'ellos', 'e', 'esto', 'mí', 'antes', 'algunos', 'qué', 'unos', 'yo', 'otro', 'otras', 'otra', 'él', 'tanto', 'esa', 'estos', 'mucho', 'quienes', 'nada', 'muchos', 'cual', 'poco', 'ella', 'estar', 'estas', 'algunas', 'algo', 'nosotros', 'mi', 'mis', 'tú', 'te', 'ti', 'tu', 'tus', 'ellas', 'nosotras', 'vosotros', 'vosotras', 'os', 'mío', 'mía', 'míos', 'mías', 'tuyo', 'tuya', 'tuyos', 'tuyas', 'suyo', 'suya', 'suyos', 'suyas', 'nuestro', 'nuestra', 'nuestros', 'nuestras', 'vuestro', 'vuestra', 'vuestros', 'vuestras', 'esos', 'esas', 'estoy', 'estás', 'está', 'estamos', 'estáis', 'están', 'esté', 'estés', 'estemos', 'estéis', 'estén', 'estaré', 'estarás', 'estará', 'estaremos', 'estaréis', 'estarán', 'estaría', 'estarías', 'estaríamos', 'estaríais', 'estarían', 'estaba', 'estabas', 'estábamos', 'estabais', 'estaban', 'estuve', 'estuviste', 'estuvo', 'estuvimos', 'estuvisteis', 'estuvieron', 'estuviera', 'estuvieras', 'estuviéramos', 'estuvierais', 'estuvieran', 'estuviese', 'estuvieses', 'estuviésemos', 'estuvieseis', 'estuviesen', 'estando', 'estado', 'estada', 'estados', 'estadas', 'estad'])
-    wordcloud = WordCloud(
-        width=800,
-        height=400,
-        background_color='white',
-        stopwords=stopwords,
-        max_words=100,
-        colormap='viridis'
-    ).generate(texto_completo)
-    return wordcloud
-
-# Área principal de la app
+# ─────────────────────────────────────────────
+# 1. Subir imagen
+# ─────────────────────────────────────────────
 st.markdown('<div class="sub-header">📤 1. Sube tu imagen</div>', unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
-    "Arrastra o selecciona una foto de tus notas de grupo focal",
+    "Arrastra o selecciona una foto de tus notas del grupo focal",
     type=['png', 'jpg', 'jpeg'],
-    help="Puede ser foto de papel, pizarra, cuaderno, etc."
+    help="Foto de papel, pizarra, cuaderno, etc."
 )
 
 if uploaded_file is not None:
@@ -240,162 +239,130 @@ if uploaded_file is not None:
         st.subheader("Imagen subida")
         image = Image.open(uploaded_file)
         st.image(image, use_container_width=True)
-        procesar = st.button("🚀 Procesar con OCR", type="primary", use_container_width=True)
+        procesar = st.button("🚀 Procesar con Claude OCR", type="primary", use_container_width=True)
 
     with col2:
-        st.subheader("Vista previa")
-        st.info("La imagen se procesará con TrOCR (microsoft/trocr-base-printed) via HuggingFace API para extraer texto estructurado")
+        st.subheader("Estado del procesamiento")
+        st.info("Claude analizará la imagen y extraerá el texto estructurado automáticamente.")
 
         if procesar:
-            if not api_token:
-                st.error("⚠️ Ingresa tu token de HuggingFace en la barra lateral para continuar.")
-            else:
-                try:
-                    with st.spinner("🔍 Analizando imagen con IA..."):
-                        resultado_api = query_ocr_api(image, api_token)
+            try:
+                with st.spinner("🔍 Analizando imagen con Claude..."):
+                    resultado_ocr = ocr_with_claude(image, api_key, segmento)
+                    st.session_state.texto_crudo = resultado_ocr
 
-                        # La API puede devolver lista o dict
-                        if isinstance(resultado_api, list) and len(resultado_api) > 0:
-                            resultado_ocr = resultado_api[0].get('generated_text', str(resultado_api))
-                        elif isinstance(resultado_api, dict):
-                            if 'error' in resultado_api:
-                                st.warning(f"⚠️ La API respondió con un error: {resultado_api['error']}")
-                            resultado_ocr = resultado_api.get('generated_text', str(resultado_api))
-                        else:
-                            st.warning("⚠️ Respuesta inesperada de la API. Se mostrará el texto crudo.")
-                            resultado_ocr = str(resultado_api)
+                    datos_json = extraer_json(resultado_ocr)
 
-                        st.session_state.texto_crudo = resultado_ocr
-
-                        datos_json = extraer_json(resultado_ocr)
-
-                        if datos_json.get('registros'):
-                            df = pd.DataFrame(datos_json['registros'])
-                        else:
-                            df = pd.DataFrame({
-                                'hora': [''],
-                                'cita': [resultado_ocr[:500]],
-                                'tema': ['Por clasificar'],
-                                'subtema': [''],
-                                'importancia': ['Media']
-                            })
-
-                        df['segmento'] = segmento
-                        st.session_state.df_resultado = df
-                        st.success("✅ ¡Procesamiento completado!")
-
-                except Exception as e:
-                    st.error(f"Error en el procesamiento: {e}")
-                    msg = str(e).lower()
-                    if "token" in msg or "permisos" in msg or "inválido" in msg:
-                        st.info(" Verifica que tu token de HuggingFace sea válido y tenga permisos de lectura.")
-                    elif "cargando" in msg:
-                        st.info(" El modelo tarda unos segundos en arrancar. Haz clic en 'Procesar con OCR' de nuevo.")
-                    elif "límite" in msg:
-                        st.info("Espera unos minutos antes de volver a intentarlo.")
-                    elif "410" in msg or "eliminado" in msg or "ya no está disponible" in msg:
-                        st.info("El modelo OCR ya no está disponible. Por favor, contacta al administrador de la aplicación.")
+                    if datos_json.get('registros'):
+                        df = pd.DataFrame(datos_json['registros'])
                     else:
-                        st.info("Intenta de nuevo. Si el problema persiste, verifica tu token de HuggingFace o usa una imagen más clara.")
+                        # Fallback: tabla vacía editable
+                        df = pd.DataFrame({
+                            'hora':       [''],
+                            'cita':       [resultado_ocr[:300]],
+                            'tema':       ['Por clasificar'],
+                            'subtema':    [''],
+                            'importancia':['Media']
+                        })
 
-# Mostrar resultados y análisis NLP
+                    # Asegurar columnas mínimas
+                    for col in ['hora', 'cita', 'tema', 'subtema', 'importancia']:
+                        if col not in df.columns:
+                            df[col] = ''
+
+                    df['segmento'] = segmento
+                    st.session_state.df_resultado = df
+                    st.success("✅ ¡Procesamiento completado!")
+
+            except anthropic.AuthenticationError:
+                st.error("❌ API Key inválida. Verifica tu clave en console.anthropic.com")
+            except anthropic.RateLimitError:
+                st.error("⏳ Límite de uso alcanzado. Espera un momento e intenta de nuevo.")
+            except Exception as e:
+                st.error(f"Error en el procesamiento: {e}")
+
+# ─────────────────────────────────────────────
+# 2. Tabla editable
+# ─────────────────────────────────────────────
 if st.session_state.df_resultado is not None:
     df = st.session_state.df_resultado
 
     st.markdown('<div class="sub-header">📊 2. Tabla Extraída (Editable)</div>', unsafe_allow_html=True)
+    st.markdown("Edita directamente las celdas si el OCR necesita correcciones:")
 
-    st.markdown("**Edita directamente la tabla si el OCR necesita correcciones:**")
     df_editado = st.data_editor(
         df,
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "hora": st.column_config.TextColumn("Hora", width="small"),
-            "cita": st.column_config.TextColumn("Cita/Lo que dijeron", width="large"),
-            "tema": st.column_config.SelectboxColumn(
-                "Tema",
-                options=["Espacio", "Servicio", "Barrera", "Otro"],
-                width="medium"
-            ),
-            "subtema": st.column_config.TextColumn("Subtema específico", width="medium"),
-            "importancia": st.column_config.SelectboxColumn(
-                "Importancia",
-                options=["Alta", "Media", "Baja"],
-                width="small"
-            ),
-            "segmento": st.column_config.TextColumn("Segmento", width="medium", disabled=True)
+            "hora":        st.column_config.TextColumn("Hora", width="small"),
+            "cita":        st.column_config.TextColumn("Cita / Lo que dijeron", width="large"),
+            "tema":        st.column_config.SelectboxColumn("Tema", options=["Espacio", "Servicio", "Barrera", "Otro"], width="medium"),
+            "subtema":     st.column_config.TextColumn("Subtema específico", width="medium"),
+            "importancia": st.column_config.SelectboxColumn("Importancia", options=["Alta", "Media", "Baja"], width="small"),
+            "segmento":    st.column_config.TextColumn("Segmento", width="medium", disabled=True),
         }
     )
 
-    st.markdown('<div class="sub-header"> 3. Análisis NLP y Sistematización</div>', unsafe_allow_html=True)
+    # ─────────────────────────────────────────────
+    # 3. Análisis NLP
+    # ─────────────────────────────────────────────
+    st.markdown('<div class="sub-header">🤖 3. Análisis NLP y Sistematización</div>', unsafe_allow_html=True)
 
-    col_nlp1, col_nlp2 = st.columns([1, 1])
+    col_nlp1, col_nlp2 = st.columns(2)
 
     with col_nlp1:
         if st.button("🔍 Aplicar Análisis Automático", type="secondary", use_container_width=True):
             with st.spinner("Analizando con NLP..."):
-                nlp_model = cargar_nlp()
                 df_analizado = df_editado.copy()
 
                 if analisis_tematico:
                     df_analizado['tema_detectado'] = df_analizado['cita'].apply(clasificar_tema)
 
                 if extraer_keywords:
-                    df_analizado['palabras_clave'] = df_analizado['cita'].apply(
-                        lambda x: extraer_palabras_clave(x, nlp_model)
-                    )
+                    df_analizado['palabras_clave'] = df_analizado['cita'].apply(extraer_palabras_clave)
 
-                if analizar_sentimiento:
+                if analizar_prioridad:
                     df_analizado['prioridad_nlp'] = df_analizado['cita'].apply(detectar_prioridad)
 
                 st.session_state.df_analizado = df_analizado
-                st.success("Análisis NLP completado")
+                st.success("✅ Análisis NLP completado")
 
     with col_nlp2:
-        if st.button("Generar Visualizaciones", use_container_width=True):
-            if 'df_analizado' in st.session_state:
+        if st.button("📈 Generar Visualizaciones", use_container_width=True):
+            if st.session_state.df_analizado is not None:
                 st.session_state.mostrar_viz = True
             else:
                 st.warning("Primero aplica el análisis NLP")
 
-    if 'df_analizado' in st.session_state:
+    # ─────────────────────────────────────────────
+    # 4. Resultados y visualizaciones
+    # ─────────────────────────────────────────────
+    if st.session_state.df_analizado is not None:
         df_viz = st.session_state.df_analizado
 
         st.markdown("**Resultado del análisis:**")
         st.dataframe(df_viz, use_container_width=True)
 
-        if st.session_state.get('mostrar_viz', False):
-            st.markdown('<div class="sub-header"> 4. Visualizaciones y Sistematización</div>', unsafe_allow_html=True)
+        if st.session_state.mostrar_viz:
+            st.markdown('<div class="sub-header">📈 4. Visualizaciones</div>', unsafe_allow_html=True)
 
-            tab1, tab2, tab3 = st.tabs(["Distribución de Temas", "Nube de Palabras", "Matriz de Prioridades"])
+            tab1, tab2 = st.tabs(["Distribución de Temas y Prioridades", "Matriz de Consolidación"])
 
             with tab1:
-                col_chart1, col_chart2 = st.columns(2)
+                col_c1, col_c2 = st.columns(2)
 
-                with col_chart1:
+                with col_c1:
                     st.subheader("Distribución por Tema")
-                    tema_col = 'tema_detectado' if 'tema_detectado' in df_viz.columns else 'tema'
-                    st.bar_chart(df_viz[tema_col].value_counts())
+                    col_tema = 'tema_detectado' if 'tema_detectado' in df_viz.columns else 'tema'
+                    st.bar_chart(df_viz[col_tema].value_counts())
 
-                with col_chart2:
+                with col_c2:
                     st.subheader("Distribución por Prioridad")
-                    prio_col = 'prioridad_nlp' if 'prioridad_nlp' in df_viz.columns else 'importancia'
-                    st.bar_chart(df_viz[prio_col].value_counts())
+                    col_prio = 'prioridad_nlp' if 'prioridad_nlp' in df_viz.columns else 'importancia'
+                    st.bar_chart(df_viz[col_prio].value_counts())
 
             with tab2:
-                st.subheader("Nube de Palabras Clave")
-                if 'palabras_clave' in df_viz.columns:
-                    textos = df_viz['cita'].tolist()
-                    wordcloud = generar_nube_palabras(textos)
-                    fig, ax = plt.subplots(figsize=(10, 5))
-                    ax.imshow(wordcloud, interpolation='bilinear')
-                    ax.axis('off')
-                    st.pyplot(fig)
-                else:
-                    st.info("Activa 'Extraer palabras clave' en la configuración")
-
-            with tab3:
-                st.subheader("Matriz de Consolidación")
                 if 'tema_detectado' in df_viz.columns and 'prioridad_nlp' in df_viz.columns:
                     matriz = pd.crosstab(
                         df_viz['tema_detectado'],
@@ -404,95 +371,92 @@ if st.session_state.df_resultado is not None:
                     )
                     st.dataframe(matriz, use_container_width=True)
 
-                    st.markdown("** Insights detectados:**")
-                    tema_mas_frecuente = df_viz['tema_detectado'].mode()[0]
-                    prioridad_dominante = df_viz['prioridad_nlp'].mode()[0]
+                    st.markdown("**🎯 Insights detectados:**")
+                    tema_frecuente  = df_viz['tema_detectado'].mode()[0]
+                    prio_dominante  = df_viz['prioridad_nlp'].mode()[0]
 
                     st.markdown(f"""
-                    - **Tema más mencionado:** {tema_mas_frecuente}
-                    - **Nivel de prioridad predominante:** {prioridad_dominante}
-                    - **Total de necesidades identificadas:** {len(df_viz)}
-                    """)
+- **Tema más mencionado:** {tema_frecuente}
+- **Nivel de prioridad predominante:** {prio_dominante}
+- **Total de registros identificados:** {len(df_viz)}
+""")
+                    alta_espacio = len(df_viz[
+                        (df_viz['tema_detectado'] == 'Espacio') & (df_viz['prioridad_nlp'] == 'Alta')
+                    ])
+                    if alta_espacio > 0:
+                        st.warning(f"⚠️ {alta_espacio} necesidad(es) de ESPACIO con prioridad ALTA detectadas.")
+                else:
+                    st.info("Aplica el análisis NLP para ver la matriz de consolidación.")
 
-                    alta_prio_espacio = len(df_viz[(df_viz['tema_detectado'] == 'Espacio') & (df_viz['prioridad_nlp'] == 'Alta')])
-                    if alta_prio_espacio > 0:
-                        st.warning(f"⚠️ Se detectaron {alta_prio_espacio} necesidades de ESPACIO con prioridad ALTA. Considerar intervención estructural.")
-
-    # Exportación
+    # ─────────────────────────────────────────────
+    # 5. Exportar
+    # ─────────────────────────────────────────────
     st.markdown('<div class="sub-header">💾 5. Exportar Resultados</div>', unsafe_allow_html=True)
+
+    df_export = st.session_state.df_analizado if st.session_state.df_analizado is not None else df_editado
 
     col_exp1, col_exp2 = st.columns(2)
 
     with col_exp1:
-        df_export = st.session_state.get('df_analizado', df_editado)
-
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_export.to_excel(writer, sheet_name='Registros', index=False)
 
-            if 'df_analizado' in st.session_state:
+            if st.session_state.df_analizado is not None:
                 if 'tema_detectado' in df_export.columns and 'prioridad_nlp' in df_export.columns:
-                    resumen_tema = df_export.groupby(['tema_detectado', 'prioridad_nlp']).size().reset_index(name='conteo')
-                    resumen_tema.to_excel(writer, sheet_name='Resumen_Temas', index=False)
+                    resumen = df_export.groupby(['tema_detectado', 'prioridad_nlp']).size().reset_index(name='conteo')
+                    resumen.to_excel(writer, sheet_name='Resumen_Temas', index=False)
 
                 if 'palabras_clave' in df_export.columns:
-                    todas_keywords = ', '.join(df_export['palabras_clave'].dropna())
-                    pd.DataFrame({'palabras_clave_consolidadas': [todas_keywords]}).to_excel(
+                    todas_kw = ', '.join(df_export['palabras_clave'].dropna())
+                    pd.DataFrame({'palabras_clave_consolidadas': [todas_kw]}).to_excel(
                         writer, sheet_name='Keywords', index=False
                     )
 
+        nombre_archivo = f"sistematizacion_{segmento.replace('/', '_')}.xlsx"
         st.download_button(
             label="📥 Descargar Excel completo",
             data=buffer.getvalue(),
-            file_name=f"sistematizacion_{segmento.replace('/', '_')}.xlsx",
+            file_name=nombre_archivo,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
 
     with col_exp2:
-        if 'df_analizado' in st.session_state:
-            json_str = st.session_state.df_analizado.to_json(orient='records', force_ascii=False, indent=2)
-            st.download_button(
-                label="📥 Descargar JSON",
-                data=json_str,
-                file_name=f"sistematizacion_{segmento.replace('/', '_')}.json",
-                mime="application/json",
-                use_container_width=True
-            )
+        json_str = df_export.to_json(orient='records', force_ascii=False, indent=2)
+        st.download_button(
+            label="📥 Descargar JSON",
+            data=json_str,
+            file_name=f"sistematizacion_{segmento.replace('/', '_')}.json",
+            mime="application/json",
+            use_container_width=True
+        )
 
-# Instrucciones al final
-with st.expander(" ¿Cómo usar esta aplicación?"):
+# ─────────────────────────────────────────────
+# Guía de uso
+# ─────────────────────────────────────────────
+with st.expander("📖 ¿Cómo usar esta aplicación?"):
     st.markdown("""
-    ### Guía paso a paso:
+### Guía paso a paso
 
-    1. **Ingresa tu token**: En la barra lateral, pega tu token gratuito de HuggingFace
-       (obténlo en huggingface.co/settings/tokens).
+1. **Ingresa tu API Key** de Anthropic en la barra lateral (console.anthropic.com → API Keys).
+2. **Selecciona el segmento** poblacional del grupo focal.
+3. **Sube la foto** de tus notas (papel, pizarra, cuaderno, etc.).
+4. **Haz clic en "Procesar con Claude OCR"** → Claude extraerá el texto automáticamente.
+5. **Revisa y edita** la tabla generada directamente en las celdas.
+6. **Aplica el análisis NLP** para categorizar, extraer palabras clave y detectar prioridades.
+7. **Genera visualizaciones** para identificar patrones.
+8. **Exporta** el Excel o JSON con el análisis completo.
 
-    2. **Selecciona el segmento**: Elige qué grupo poblacional estás analizando.
-
-    3. **Sube la imagen**: Arrastra o selecciona tu foto en el área de carga.
-
-    4. **Procesa con OCR**: Haz clic en "Procesar con OCR". El modelo TrOCR
-       extraerá el texto automáticamente via API.
-
-    5. **Revisa y edita**: La tabla generada es editable. Corrige cualquier error
-       del OCR directamente en las celdas.
-
-    6. **Aplica NLP**: Haz clic en "Aplicar Análisis Automático" para:
-       - Clasificar automáticamente en Espacio/Servicio/Barrera
-       - Extraer palabras clave
-       - Detectar nivel de prioridad
-
-    7. **Visualiza**: Genera gráficos y la nube de palabras para identificar patrones.
-
-    8. **Exporta**: Descarga el Excel con todo el análisis para tu informe final.
-
-    ### Tips para mejores resultados:
-    - Usa buena iluminación al tomar la foto
-    - Evita ángulos extremos (foto lo más frontal posible)
-    - Si el OCR no detecta bien, puedes escribir manualmente en la tabla
-    - Procesa un grupo focal a la vez para mantener organizados los segmentos
-    """)
+### Tips para mejores resultados
+- Usa buena iluminación al tomar la foto
+- Foto lo más frontal posible (evita ángulos extremos)
+- Si el OCR no detecta bien, edita directamente la tabla
+- Procesa un grupo focal a la vez para mantener los segmentos organizados
+""")
 
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: gray;'>Desarrollado para sistematización de diagnóstico participativo - Biblioteca Departamental</div>", unsafe_allow_html=True)
+st.markdown(
+    "<div style='text-align:center; color:gray;'>Desarrollado para sistematización de diagnóstico participativo · Biblioteca Departamental</div>",
+    unsafe_allow_html=True
+)
